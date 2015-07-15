@@ -1,5 +1,5 @@
 # openssl-version_scan
-Ever wanted to know which versions of OpenSSL are really deployed on your servers? openssl-version_scan scans processes and directories for OpenSSL version information and lists versions numbers for both statically and dynamically linked OpenSSL libraries.
+Ever wanted to know which versions of OpenSSL are really deployed on your servers? openssl-version_scan scans processes and directories for OpenSSL version information and lists versions numbers for both statically and dynamically linked libraries.
 
 Note: Currently relies on ldd to resolve shared libraries. You might want to disable this behavior by providing the ```--no-shared``` option as this can be a security risk when run on untusted binaries.
 
