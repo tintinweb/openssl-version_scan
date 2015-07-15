@@ -69,8 +69,9 @@ class OSSLVersionScan(object):
         self.scan_magic_size = scan_magic_size
         if use_mmap:
             setattr(self,"find_static_versions",self.find_static_versions_mmap)
-        self.num_files_scanned = 0              # overall scanned files (non dupes)
-        self.num_files_hit = 0                  # overall hits
+        self.num_files_total = 0                # total files
+        self.num_files_scanned = 0              # all files that were scanned for openssl traces
+        self.num_files_hit = 0                  # static openssl references
 
     def find_static_versions_strings(self, path):
         return set(self.REX_STATIC_VERSION.findall(Utils.shell("strings '%s' | grep -i openssl"%path)))
@@ -111,20 +112,23 @@ class OSSLVersionScan(object):
         if versions is not None:
             return versions
         self.static_versions[path] = self.find_static_versions(path)
-        logging.debug("%s - %s"%(path,self.static_versions[path]))
+        if self.static_versions[path]:
+            self.num_files_hit +=1
+        #logging.debug("%s - %s"%(path,self.static_versions[path]))
         return self.static_versions[path]
 
     def get_dynamic_versions(self, path):
         if not self.supports_shell_ldd:
-            return
+            return {}
         refs = self.results.get(path)
         if refs is not None:
             return refs
         out = Utils.shell("ldd '%s'"%path)
         dynrefs = self.REX_DYNAMIC_VERSION.findall(out)
-        logging.debug("%s refs %d dynamic libs"%(path,len(dynrefs)))
+        #logging.debug("%s refs %d dynamic libs"%(path,len(dynrefs)))
         refs = {}
         for ref in dynrefs:
+            self.scan_file(ref)
             refs[ref] = self.get_static_version(ref)
         return refs
 
@@ -133,26 +137,25 @@ class OSSLVersionScan(object):
             return
         static = self.get_static_version(path)
         dynamic = self.get_dynamic_versions(path)
-        self.num_files_scanned +=1
+        self.num_files_total +=1
         if not static and not dynamic:
             return
-        self.num_files_hit +=1
+        self.num_files_scanned +=1
         self.results[path]={'static':static,
                             'dynamic':dynamic}
-
     def scan_path(self, base):
         if os.path.isfile(base):
             return self.scan_file(base)
         
         for nr,path in enumerate(Utils.walk_executables(base)):
-            logging.info("scanning: #%d - %s"%(nr+1,path))
+            logging.debug("scanning: #%d - %s"%(nr+1,path))
             self.scan_file(path)
             
     def scan_processes(self):
         proclist = Linux.process_list()
         numprocs = len(proclist)
         for nr, path in enumerate(proclist):
-            logging.info("scanning: %d/%d - %s"%(nr+1,numprocs,path))
+            logging.debug("scanning: %d/%d - %s"%(nr+1,numprocs,path))
             self.scan_file(path)
 
     def get_static_results(self):
@@ -214,9 +217,6 @@ class SimpleMmapFile(object):
             os.close(self.fp)
             self.fp=None
         
-    def __del__(self):
-        self.close()
-
 def usage():
     print """USAGE: %s [options...] <path1> ... <pathN>
     
@@ -284,16 +284,11 @@ def main():
     consoleHandler.setFormatter(logFormatter)
     rootLogger.addHandler(consoleHandler)
     rootLogger.setLevel(opts['verbosity'])
-    '''
-    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
-                        level=opts['verbosity'],
-                        filename= opts['logfile'] if opts['logfile'] else None,
-                        filemode='w')
-    '''
+    
     ossl = OSSLVersionScan(scan_shared=not opts['no-dynamic'],
                            use_mmap=not opts['no-mmap'])
     if not ossl.supports_shell_ldd:
-        logging.warning("[!] shell 'ldd' not in $PATH; cannot scan dynamic links")
+        logging.warning("[!] scan support for shared libraries is disabled or 'ldd' utility is not in $PATH; cannot scan dynamic links")
     if opts['procs']:
         logging.info("[*] scanning process list...")
         ossl.scan_processes()
@@ -304,20 +299,35 @@ def main():
         
         
     logging.info("Results".center(30,"="))
-    logging.info("[>] File Overview: %d of %d scanned files hit"%(ossl.num_files_hit,ossl.num_files_scanned))
+    logging.info("[>] File Overview: ")
+    num_hit_static = 0
+    num_hit_shared = 0
+    num_hit_files = 0
     for path, refs in ossl.get_versions_by_path().iteritems():
-        logging.info("* File: %s\n ** [static]  %s\n ** [dynamic] %s"%(path,refs['static'],refs['dynamic']))
-    
+        if refs['static'] or refs['dynamic']:
+            num_hit_files +=1
+            if refs['static']:
+                num_hit_static +=1
+            if refs['dynamic']:
+                num_hit_shared +=1
+        logging.info("* File: %s\n ** [static]  %s\n ** [dynamic] %s"%(path,refs['static'],refs['dynamic']))  
+  
     logging.info("Statistics".center(30,"="))
+    logging.info("[>] Scan:")
+    logging.info(" Candidate files (total):    %6d"%ossl.num_files_total)
+    logging.info(" Files scanned:              %6d"%ossl.num_files_scanned)
+    logging.info(" Traces of openssl detected: %6d"%num_hit_files)
+    logging.info(" * static traces:            %6d"%num_hit_static)
+    logging.info(" * shared library references:%6d"%num_hit_shared)
     logging.info("[>] distinct openssl versions:")
     for v in ossl.get_distinct_versions():
         logging.info("* %s"%v)
         
     logging.info("[>] version overview:")
-    logging.info("       version         |  static  | shared | ")
-    logging.info("---------------------- |----------|--------|")
+    logging.info("       version         |  static  | shared references | ")
+    logging.info("---------------------- |----------|-------------------|")
     for version, refs in ossl.get_version_count().iteritems():
-        logging.info("* %-20s |  %6d  | %6d |"%(version,refs['static'],refs['dynamic']))
+        logging.info("* %-20s |  %6d  |           %6d  |"%(version,refs['static'],refs['dynamic']))
         
     
     if opts['wikimarkup']:
@@ -331,8 +341,7 @@ def main():
         for version, refs in ossl.get_version_count().iteritems():
             wikimarkup += '\n|%s |%s |%s |'%(version,refs['static'],refs['dynamic'])
         logging.info("Wikimarkup: version overview\n%s"%wikimarkup)
-        
-    
+
 if __name__=="__main__":
     start = time.time()
     main()
