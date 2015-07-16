@@ -7,22 +7,24 @@ Use at own risk.
 
 ### usage
 
-        USAGE: openssl_scan.py [options...] <path1> ... <pathN>
+      USAGE: ossl.py [options...] <path1> ... <pathN>
 
-            options:
-            -p, --procs                   scan running processes
+          options:
+          -p, --procs                   scan running processes
+          -i, --ignore-prefix=<path>    skip files prefixed with <path,...>
 
-            -S, --no-shared               do NOT scan shared libraries
-            -M, --no-mmap                 do NOT use memory mapped files (significant slower)
+          -S, --no-shared               do NOT scan shared libraries
+          -M, --no-mmap                 do NOT use memory mapped files (significant slower)
 
-            -w, --wikimarkup              enable wiki style table output
-            -v, --verbosity=<level>       <level> 0 [none] ... 10 [debug] ... 20 [info] ... 50 [critical]
-            -l, --logfile=<file>          log output to <file>
-
-
+          -w, --wikimarkup              enable wiki style table output
+          -v, --verbosity=<level>       <level> 0 [none] ... 10 [debug] ... 20 [info] ... 50 [critical]
+          -l, --logfile=<file>          log output to <file>
 
 ### example
 
+        # scan all files
+        #> python openssl_scan.py --procs --ignore-prefix=/proc/ /
+        # scan /usr/sbin
         #> python openssl_scan.py --procs  /usr/sbin
         2015-07-15 22:18:51,484 [MainThread  ] [INFO ]  [*] scanning process list...
         2015-07-15 22:18:55,891 [MainThread  ] [INFO ]  [*] scanning path (recursive): /usr/sbin ...
