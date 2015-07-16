@@ -60,7 +60,7 @@ class OSSLVersionScan(object):
     REX_STATIC_VERSION=re.compile(r'(openssl [0-9a-zA-Z]+\.[0-9a-zA-Z\.]+)',re.IGNORECASE)
     REX_DYNAMIC_VERSION=re.compile(r'=> ([^\s(]+)',re.IGNORECASE)
 
-    def __init__(self, scan_shared=True, scan_magic=["ELF"], scan_magic_size=10, use_mmap=True):
+    def __init__(self, scan_shared=True, scan_magic=["ELF"], scan_magic_size=10, use_mmap=True, ignore_path_prefix=[]):
         self.results = {}                       # path : { static, dynamic }
         self.static_versions = {}               # path : set([version, ...])
         self.refs = defaultdict(int)            # path : num_refs
@@ -72,6 +72,8 @@ class OSSLVersionScan(object):
         self.num_files_total = 0                # total files
         self.num_files_scanned = 0              # all files that were scanned for openssl traces
         self.num_files_hit = 0                  # static openssl references
+        
+        self.ignore_path_prefix = ignore_path_prefix  # list of path prefixes to skip
 
     def find_static_versions_strings(self, path):
         return set(self.REX_STATIC_VERSION.findall(Utils.shell("strings '%s' | grep -i openssl"%path)))
@@ -102,7 +104,7 @@ class OSSLVersionScan(object):
                     if result:
                         break
             smf.close()
-        except EnvironmentError, ee:
+        except (EnvironmentError, ValueError), ee:
             logging.warning("[!] exception: %s - %s"%(path,repr(ee)))
         return result
 
@@ -134,6 +136,9 @@ class OSSLVersionScan(object):
 
     def scan_file(self, path):
         if path in self.results:            # scanned already
+            return
+        if any((i for i in self.ignore_path_prefix if path.startswith(i))):
+            logging.debug("skipping (ignore prefix): %s"%path)
             return
         static = self.get_static_version(path)
         dynamic = self.get_dynamic_versions(path)
@@ -222,6 +227,7 @@ def usage():
     
     options:
     -p, --procs                   scan running processes
+    -i, --ignore-prefix=<path>    skip files prefixed with <path,...>
 
     -S, --no-shared               do NOT scan shared libraries   
     -M, --no-mmap                 do NOT use memory mapped files (significant slower)
@@ -237,9 +243,12 @@ def parse_opts():
                'wikimarkup':False,
                'no-dynamic':False,
                'no-mmap':False,
-               'logfile':None}
+               'logfile':None,
+               'ignore-prefix':[]}
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hv=pwSMl=", ["help", "procs","verbosity=","wikimarkup", "no-shared", "no-mmap", "logfile="])
+        opts, args = getopt.getopt(sys.argv[1:], "hv=pwSMl=i=", ["help", "procs","verbosity=","wikimarkup", 
+                                                               "no-shared", "no-mmap", "logfile=",
+                                                               "ignore-prefix="])
     except getopt.GetoptError, err:
         # print help information and exit:
         print str(err) # will print something like "option -a not recognized"
@@ -263,6 +272,8 @@ def parse_opts():
             options['no-mmap']=True
         elif o in ("-l", "--logfile"):
             options['logfile']=a
+        elif o in ("-i", "--ignore-prefix"):
+            options['ignore-prefix']=[e.strip() for e in a.strip().split(',')]
         else:
             assert False, "unhandled option"
     return options,args
@@ -286,9 +297,13 @@ def main():
     rootLogger.setLevel(opts['verbosity'])
     
     ossl = OSSLVersionScan(scan_shared=not opts['no-dynamic'],
-                           use_mmap=not opts['no-mmap'])
+                           use_mmap=not opts['no-mmap'],
+                           ignore_path_prefix=opts['ignore-prefix'])
     if not ossl.supports_shell_ldd:
         logging.warning("[!] scan support for shared libraries is disabled or 'ldd' utility is not in $PATH; cannot scan dynamic links")
+    if opts['ignore-prefix']:
+        logging.info("[i] ignoring path prefixes: %s"%','.join(opts['ignore-prefix']))
+        
     if opts['procs']:
         logging.info("[*] scanning process list...")
         ossl.scan_processes()
@@ -331,9 +346,11 @@ def main():
         
     
     if opts['wikimarkup']:
-        wikimarkup = '||file||static||dynamic||'
+        wikimarkup = '||#||file||static||dynamic||'
+        nr = 0
         for version, refs in ossl.get_versions_by_path().iteritems():
-            wikimarkup += '\n|%s |%s |%s |'%(version,','.join(refs['static']),','.join(refs['dynamic']))
+            nr+=1 
+            wikimarkup += '\n|%d |%s |%s |%s |'%(nr, version,','.join(refs['static']),','.join(refs['dynamic']))
         logging.info("Wikimarkup: file overview\n%s"%wikimarkup)
         
         
